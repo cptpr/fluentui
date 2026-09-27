@@ -1,0 +1,103 @@
+name: Build and publish Storybook image
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: fluentui-storybook-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ghcr.io/cptpr/fluentui
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      image_tag: ${{ steps.image-tag.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive immutable image tag
+        id: image-tag
+        run: echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.source=https://github.com/cptpr/fluentui
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify anonymous image pull
+        run: |
+          docker logout ghcr.io
+          docker pull "${IMAGE_NAME}:${{ steps.image-tag.outputs.tag }}"
+
+  promote-gitops:
+    if: github.ref == 'refs/heads/master'
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out GitOps
+        uses: actions/checkout@v4
+        with:
+          repository: project-agharta/agharta-gitops
+          ref: main
+          path: agharta-gitops
+          ssh-key: ${{ secrets.AGHARTA_GITOPS_SSH_KEY }}
+
+      - name: Promote the immutable image tag
+        env:
+          IMAGE_TAG: ${{ needs.publish.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          gitops_path=agharta-gitops
+          deployment_path="$gitops_path/apps/fluentui-storybook/deployment.yaml"
+
+          sed -i -E "s#(image: ghcr.io/cptpr/fluentui:)[^[:space:]]+#\\1${IMAGE_TAG}#" "$deployment_path"
+
+          if git -C "$gitops_path" diff --quiet -- "$deployment_path"; then
+            exit 0
+          fi
+
+          git -C "$gitops_path" config user.name "github-actions[bot]"
+          git -C "$gitops_path" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$gitops_path" add "$deployment_path"
+          git -C "$gitops_path" commit -m "chore(fluentui-storybook): deploy ${IMAGE_TAG}"
+          git -C "$gitops_path" push origin HEAD:main
