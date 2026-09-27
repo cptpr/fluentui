@@ -63,10 +63,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Make the linked GHCR package public
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh api --method PATCH /user/packages/container/fluentui -f visibility=public
+      - name: Verify anonymous image pull
+        run: |
+          docker logout ghcr.io
+          docker pull "${IMAGE_NAME}:${{ steps.image-tag.outputs.tag }}"
 
   promote-gitops:
     if: github.ref == 'refs/heads/master'
@@ -80,7 +80,7 @@ jobs:
           repository: project-agharta/agharta-gitops
           ref: main
           path: agharta-gitops
-          token: ${{ secrets.AGHARTA_GITOPS_TOKEN }}
+          ssh-key: ${{ secrets.AGHARTA_GITOPS_SSH_KEY }}
 
       - name: Promote the immutable image tag
         env:
