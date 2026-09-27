@@ -63,6 +63,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Make the linked GHCR package public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api --method PATCH /user/packages/container/fluentui -f visibility=public
+
   promote-gitops:
     if: github.ref == 'refs/heads/master'
     needs: publish
