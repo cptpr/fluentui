@@ -64,6 +64,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   promote-gitops:
+    if: github.ref == 'refs/heads/master'
     needs: publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
